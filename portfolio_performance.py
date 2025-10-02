@@ -19,7 +19,7 @@ st.sidebar.header("Portfolio Configuration")
 
 # Default tickers and weights (your optimized portfolio)
 default_tickers = ["HWM", "NVDA", "MSI", "AMZN", "MA", "TSLA", "ALB"]
-default_weights = [0, 0, 15.6, 12.5, 28.9, 33.8, 9.2]  
+default_weights = [0, 0, 18.6, 7.7, 27.7, 37, 9]  
 
 # User inputs
 buy_date = st.sidebar.date_input(
@@ -51,7 +51,7 @@ for i, ticker in enumerate(default_tickers):
 
 # Normalize weights to sum to 100%
 total_weight = sum(weights.values())
-if total_weight != 100:
+if total_weight != 100 and total_weight > 0:
     st.sidebar.warning(f"Weights sum to {total_weight:.1f}%. Normalizing to 100%.")
     weights = {k: (v/total_weight)*100 for k, v in weights.items()}
 
@@ -101,6 +101,9 @@ if st.sidebar.button("Update Portfolio Performance", type="primary"):
                     
                     if close_data:
                         data = pd.DataFrame(close_data)
+                        # Remove timezone if present
+                        if data.index.tz is not None:
+                            data.index = data.index.tz_localize(None)
                     else:
                         # Try alternative structure
                         data = pd.DataFrame()
@@ -122,8 +125,15 @@ if st.sidebar.button("Update Portfolio Performance", type="primary"):
                         end_date = date.today()
                         hist = ticker_data.history(start=buy_date, end=end_date, auto_adjust=True)
                         
-                        if not hist.empty and 'Close' in hist.columns:
-                            data_dict[ticker] = hist['Close']
+                        # Remove timezone if present
+                        if not hist.empty:
+                            if hist.index.tz is not None:
+                                hist.index = hist.index.tz_localize(None)
+                            
+                            if 'Close' in hist.columns:
+                                data_dict[ticker] = hist['Close']
+                            else:
+                                failed_tickers.append(ticker)
                         else:
                             failed_tickers.append(ticker)
                     except Exception as ticker_error:
@@ -144,6 +154,10 @@ if st.sidebar.button("Update Portfolio Performance", type="primary"):
             # Clean the data
             data = data.ffill().bfill()  # Forward fill then backward fill
             data = data.dropna()  # Remove any remaining NaN values
+            
+            # Remove timezone from index if present to avoid comparison issues
+            if data.index.tz is not None:
+                data.index = data.index.tz_localize(None)
             
             if data.empty:
                 st.error("No valid data available after cleaning. Try a more recent date.")
@@ -177,9 +191,15 @@ if st.sidebar.button("Update Portfolio Performance", type="primary"):
             
             portfolio_values.append(portfolio_value)
         
-        # Create performance DataFrame
+        # Create performance DataFrame (handle timezone)
+        # Remove timezone info from dates if present
+        if hasattr(dates, 'tz'):
+            dates_clean = dates.tz_localize(None)
+        else:
+            dates_clean = pd.to_datetime(dates).tz_localize(None) if dates[0].tzinfo is not None else dates
+            
         performance_df = pd.DataFrame({
-            'Date': dates,
+            'Date': dates_clean,
             'Portfolio_Value': portfolio_values
         })
         
@@ -204,8 +224,10 @@ if st.sidebar.button("Update Portfolio Performance", type="primary"):
         current_value = portfolio_values[-1]
         total_return = (current_value / initial_investment - 1) * 100
         
-        # Calculate days held
-        calendar_days = (dates[-1] - dates[0]).days
+        # Calculate days held (handle timezone-aware dates)
+        start_date = pd.to_datetime(dates[0]).tz_localize(None) if hasattr(dates[0], 'tz') else dates[0]
+        end_date = pd.to_datetime(dates[-1]).tz_localize(None) if hasattr(dates[-1], 'tz') else dates[-1]
+        calendar_days = (end_date - start_date).days
         trading_days = len(performance_df)
         
         # Calculate annualized return
@@ -282,6 +304,12 @@ if st.sidebar.button("Update Portfolio Performance", type="primary"):
         
         # Add S&P 500 if available
         if not spy_returns.empty and len(spy_returns) > 0:
+            # Remove timezone from spy_returns index if present
+            spy_index = spy_returns.index
+            if spy_index.tz is not None:
+                spy_index = spy_index.tz_localize(None)
+            spy_returns.index = spy_index
+            
             # Align dates
             spy_aligned = spy_returns.reindex(performance_df['Date'], method='ffill')
             fig_returns.add_trace(go.Scatter(
